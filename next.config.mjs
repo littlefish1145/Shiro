@@ -6,8 +6,6 @@ import NextBundleAnalyzer from '@next/bundle-analyzer'
 import { codeInspectorPlugin } from 'code-inspector-plugin'
 import { config } from 'dotenv'
 
- 
-
 process.title = 'Shiro (NextJS)'
 
 const env = config().parsed || {}
@@ -26,16 +24,28 @@ if (repoInfo) {
 }
 
 /** @type {import('next').NextConfig} */
- 
 let nextConfig = {
-  // logging: {
-  //   fetches: {
+  // 关键配置：解决序列化错误
+  serverComponentsExternalPackages: [
+    '@aws-sdk/client-s3',
+    '@upstash/redis',
+    'better-auth',
+    'crossbell',
+    'mongoose',
+    '@prisma/client',
+    'drizzle-orm',
+    'js-yaml',
+    'katex',
+    'mermaid',
+    'openai',
+    'pngjs',
+    'rss',
+    'socket.io-client',
+    'unified',
+    'xss'
+  ],
 
-  //     // fullUrl: true,
-  //   },
-  // },
   env: {
-     
     COMMIT_HASH: commitHash,
     COMMIT_URL: commitUrl,
   },
@@ -43,13 +53,25 @@ let nextConfig = {
   productionBrowserSourceMaps: false,
   output: 'standalone',
   assetPrefix: isProd ? env.ASSETPREFIX || undefined : undefined,
+  
   compiler: {
-    // reactRemoveProperties: { properties: ['^data-id$', '^data-(\\w+)-id$'] },
+    // 移除生产环境的data属性，减小包体积
+    reactRemoveProperties: isProd ? { 
+      properties: ['^data-id$', '^data-(\\w+)-id$'] 
+    } : false,
   },
+  
   experimental: {
     serverMinification: true,
     webpackBuildWorker: true,
-    // optimizePackageImports: ['dayjs'],
+    optimizePackageImports: [
+      'dayjs',
+      'lodash',
+      'jotai',
+      'clsx',
+      'chroma-js',
+      'fuse.js'
+    ],
   },
 
   images: {
@@ -64,6 +86,28 @@ let nextConfig = {
       "default-src 'self'; script-src 'none'; sandbox; style-src 'unsafe-inline';",
   },
 
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff'
+          },
+          {
+            key: 'X-Frame-Options',
+            value: 'DENY'
+          },
+          {
+            key: 'X-XSS-Protection',
+            value: '1; mode=block'
+          }
+        ],
+      }
+    ]
+  },
+
   async rewrites() {
     return {
       beforeFiles: [
@@ -74,60 +118,43 @@ let nextConfig = {
     }
   },
 
-  webpack: (config) => {
+  webpack: (config, { isServer }) => {
     config.resolve.alias['jotai'] = path.resolve(
       __dirname,
       'node_modules/jotai',
     )
 
-    config.externals.push({
-      'utf-8-validate': 'commonjs utf-8-validate',
-      bufferutil: 'commonjs bufferutil',
-    })
+    // 只在服务端外部化这些包
+    if (isServer) {
+      config.externals.push({
+        'utf-8-validate': 'commonjs utf-8-validate',
+        'bufferutil': 'commonjs bufferutil',
+      })
+    }
 
     config.plugins.push(
       codeInspectorPlugin({ bundler: 'webpack', hotKeys: ['metaKey'] }),
     )
 
+    // 优化moment.js的打包（如果存在）
+    config.plugins.push(new webpack.IgnorePlugin({
+      resourceRegExp: /^\.\/locale$/,
+      contextRegExp: /moment$/
+    }))
+
     return config
   },
 }
 
-// if (env.SENTRY === 'true' && isProd) {
-//   // @ts-expect-error
-//   nextConfig = withSentryConfig(
-//     nextConfig,
-//     {
-//       // For all available options, see:
-//       // https://github.com/getsentry/sentry-webpack-plugin#options
-//
-//       // Suppresses source map uploading logs during build
-//       silent: true,
-//
-//       org: 'inneis-site',
-//       project: 'Shiro',
-//     },
-//     {
-//       // For all available options, see:
-//       // https://docs.sentry.io/platforms/javascript/guides/nextjs/manual-setup/
-//
-//       // Upload a larger set of source maps for prettier stack traces (increases build time)
-//       widenClientFileUpload: true,
-//
-//       // Transpiles SDK to be compatible with IE11 (increases bundle size)
-//       transpileClientSDK: true,
-//
-//       // Routes browser requests to Sentry through a Next.js rewrite to circumvent ad-blockers (increases server load)
-//       tunnelRoute: '/monitoring',
-//
-//       // Hides source maps from generated client bundles
-//       hideSourceMaps: true,
-//
-//       // Automatically tree-shake Sentry logger statements to reduce bundle size
-//       disableLogger: true,
-//     },
-//   )
-// }
+// 生产环境禁用源码映射以减小体积
+if (isProd) {
+  nextConfig.compiler = {
+    ...nextConfig.compiler,
+    removeConsole: {
+      exclude: ['error', 'warn'],
+    },
+  }
+}
 
 if (process.env.ANALYZE === 'true') {
   nextConfig = NextBundleAnalyzer({
@@ -157,34 +184,27 @@ function getRepoInfo() {
 
 function getRepoInfoFromGit() {
   try {
-    // 获取最新的 commit hash
-    // 获取当前分支名称
     const currentBranch = execSync('git rev-parse --abbrev-ref HEAD')
       .toString()
       .trim()
-    // 获取当前分支跟踪的远程仓库名称
     const remoteName = execSync(`git config branch.${currentBranch}.remote`)
       .toString()
       .trim()
-    // 获取当前分支跟踪的远程仓库的 URL
     let remoteUrl = execSync(`git remote get-url ${remoteName}`)
       .toString()
       .trim()
 
-    // 获取最新的 commit hash
     const hash = execSync('git rev-parse HEAD').toString().trim()
-    // 转换 git@ 格式的 URL 为 https:// 格式
+    
     if (remoteUrl.startsWith('git@')) {
       remoteUrl = remoteUrl
         .replace(':', '/')
         .replace('git@', 'https://')
         .replace('.git', '')
     } else if (remoteUrl.endsWith('.git')) {
-      // 对于以 .git 结尾的 https URL，移除 .git
       remoteUrl = remoteUrl.slice(0, -4)
     }
 
-    // 根据不同的 Git 托管服务自定义 URL 生成规则
     let webUrl
     if (remoteUrl.includes('github.com')) {
       webUrl = `${remoteUrl}/commit/${hash}`
@@ -193,7 +213,6 @@ function getRepoInfoFromGit() {
     } else if (remoteUrl.includes('bitbucket.org')) {
       webUrl = `${remoteUrl}/commits/${hash}`
     } else {
-      // 对于未知的托管服务，可以返回 null 或一个默认格式
       webUrl = `${remoteUrl}/commits/${hash}`
     }
 
